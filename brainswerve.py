@@ -2,11 +2,15 @@ import asyncio
 import websockets
 import json
 import matplotlib
-
-matplotlib.use('TkAgg')
+matplotlib.use('Agg')  # Change to non-GUI backend
 import matplotlib.pyplot as plt
 import numpy as np
+import logging
+from websockets.exceptions import ConnectionClosed
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class EEGPlotter:
     def __init__(self):
@@ -34,18 +38,49 @@ class EEGPlotter:
         self.fig.canvas.flush_events()
 
 
+async def connect_with_retry(uri, max_retries=5, delay=2):
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Attempting to connect to {uri} (attempt {attempt + 1}/{max_retries})")
+            return await websockets.connect(uri)
+        except Exception as e:
+            logger.error(f"Connection attempt {attempt + 1} failed: {str(e)}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(delay)
+            else:
+                raise
+
 async def main():
     plotter = EEGPlotter()
-    async with websockets.connect('ws://localhost:8765') as websocket:
-        while True:
-            try:
-                data = await websocket.recv()
-                eeg_data = json.loads(data)['eeg_data']
-                plotter.update(eeg_data)
-            except Exception as e:
-                print(f"Error: {e}")
-                break
-
+    uri = 'ws://localhost:8765'  # Connect to localhost
+    
+    while True:
+        try:
+            async with await connect_with_retry(uri) as websocket:
+                logger.info("Connected to WebSocket server")
+                while True:
+                    try:
+                        data = await websocket.recv()
+                        eeg_data = json.loads(data)['eeg_data']
+                        plotter.update(eeg_data)
+                    except ConnectionClosed as e:
+                        logger.error(f"WebSocket connection closed: {str(e)}")
+                        break
+                    except json.JSONDecodeError as e:
+                        logger.error(f"JSON decode error: {str(e)}")
+                        continue
+                    except Exception as e:
+                        logger.error(f"Unexpected error: {str(e)}")
+                        break
+        except Exception as e:
+            logger.error(f"Connection error: {str(e)}")
+            await asyncio.sleep(5)  # Wait before retrying
+            continue
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Program terminated by user")
+    except Exception as e:
+        logger.error(f"Program terminated due to error: {str(e)}")
