@@ -41,8 +41,8 @@ async def stream_data(websocket):  # Remove path argument for newer websockets v
 
 async def main():
     logger.info("Starting server...")
-    async with websockets.serve(stream_data, "localhost", 8765):
-        logger.info("Server running on ws://localhost:8765")
+    async with websockets.serve(stream_data, "0.0.0.0", 8765):
+        logger.info("Server running on ws://0.0.0.0:8765")
         await asyncio.Future()
 
 
