@@ -2,13 +2,16 @@ import asyncio
 import websockets
 import json
 import matplotlib
-matplotlib.use('TkAgg')
+matplotlib.use('TkAgg')  # Make sure this is set before importing pyplot
 import matplotlib.pyplot as plt
 import numpy as np
+import threading
 import logging
-from websockets.exceptions import ConnectionClosed
+from queue import Queue, Empty
+import tkinter as tk
+from matplotlib.animation import FuncAnimation
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 BAND_COLORS = {
@@ -19,110 +22,128 @@ BAND_COLORS = {
     'Gamma': 'purple'
 }
 
-class BrainWavePlotter:
+class DataPlotter:
     def __init__(self):
-        plt.ion()  # Enable interactive mode
-        self.fig = plt.figure(figsize=(15, 10))
+        self.fig, (self.ax1, self.ax2) = plt.subplots(2, 1, figsize=(10, 8))
+        self.lines = {}
         
-        # Subplot for brain waves
-        self.ax_waves = self.fig.add_subplot(211)
-        self.wave_lines = {}
-        self.x = np.arange(250)
-        
-        # Initialize lines for each frequency band
+        # Initialize lines for band data
         for band, color in BAND_COLORS.items():
-            line, = self.ax_waves.plot(self.x, np.zeros(250), label=band, 
-                                     color=color, lw=2)
-            self.wave_lines[band] = line
+            self.lines[band], = self.ax1.plot([], [], color=color, label=band)
         
-        self.ax_waves.set_title('Brain Wave Bands')
-        self.ax_waves.set_ylabel('Amplitude (μV)')
-        self.ax_waves.set_ylim(-50, 50)
-        self.ax_waves.grid(True)
-        self.ax_waves.legend(loc='upper right')
+        self.ax1.set_title('Real-time Brain Wave Bands')
+        self.ax1.set_xlabel('Sample')
+        self.ax1.set_ylabel('Amplitude (μV)')
+        self.ax1.grid(True)
+        self.ax1.legend()
         
-        # Subplot for band power
-        self.ax_power = self.fig.add_subplot(212)
-        x_pos = np.arange(len(BAND_COLORS))
-        self.power_bars = self.ax_power.bar(x_pos, np.zeros(len(BAND_COLORS)),
-                                          color=list(BAND_COLORS.values()))
-        self.ax_power.set_title('Band Powers')
-        self.ax_power.set_xlabel('Frequency Band')
-        self.ax_power.set_ylabel('Power (μV²)')
-        self.ax_power.set_xticks(x_pos)
-        self.ax_power.set_xticklabels(list(BAND_COLORS.keys()))
+        # Initialize bar plot for powers
+        self.bar_container = self.ax2.bar(BAND_COLORS.keys(), [0] * len(BAND_COLORS), 
+                                        color=BAND_COLORS.values())
+        self.ax2.set_title('Band Powers')
+        self.ax2.set_ylabel('Power (μV²)')
         
-        # Add text for power values
-        self.power_text = []
-        for i in range(len(BAND_COLORS)):
-            txt = self.ax_power.text(i, 0, '', ha='center', va='bottom')
-            self.power_text.append(txt)
-        
+        self.data_queue = Queue()
         plt.tight_layout()
-        self.fig.canvas.draw()
-        plt.pause(0.1)  # Small pause to ensure window is shown
+        
+        # Setup animation
+        self.ani = FuncAnimation(
+            self.fig, self.update, interval=50,
+            blit=False, cache_frame_data=False)
 
-    def update(self, band_data, band_powers):
+    def update(self, frame):
         try:
-            # Update wave plots
-            for band_name, line in self.wave_lines.items():
-                y_data = np.array(band_data[band_name])
-                line.set_data(self.x[:len(y_data)], y_data)
+            data = self.data_queue.get_nowait()
             
-            # Update power bars and text
-            for idx, (band_name, power) in enumerate(band_powers.items()):
-                self.power_bars[idx].set_height(power)
-                self.power_text[idx].set_text(f'{power:.1f}')
-                self.power_text[idx].set_position((idx, power))
+            # Update band data plots
+            for band, values in data['band_data'].items():
+                self.lines[band].set_data(range(len(values)), values)
             
-            # Update power axis limits
-            max_power = max(band_powers.values())
-            self.ax_power.set_ylim(0, max_power * 1.1)
+            # Update power bars
+            for idx, (band, power) in enumerate(data['band_powers'].items()):
+                self.bar_container[idx].set_height(power)
             
-            # Redraw
-            self.fig.canvas.draw_idle()
-            plt.pause(0.001)  # Small pause to allow GUI to update
+            # Adjust axes limits
+            self.ax1.relim()
+            self.ax1.autoscale_view()
+            self.ax2.relim()
+            self.ax2.autoscale_view()
             
+        except Empty:
+            pass
         except Exception as e:
-            logger.error(f"Error updating plot: {e}")
+            logger.error(f"Plot update exception: {str(e)}", exc_info=True)
 
-async def data_receiver(websocket, plotter):
-    try:
-        while True:
-            try:
-                message = await websocket.recv()
-                data = json.loads(message)
-                plotter.update(data['band_data'], data['band_powers'])
-            except ConnectionClosed:
-                logger.info("Connection closed by server")
-                break
-            except Exception as e:
-                logger.error(f"Error processing data: {e}")
-                continue
-    except Exception as e:
-        logger.error(f"Error in data receiver: {e}")
-
-async def main():
+async def handle_websocket(plotter):
     uri = "ws://localhost:8765"
-    plotter = BrainWavePlotter()
-    
     while True:
         try:
             async with websockets.connect(uri) as websocket:
                 logger.info("Connected to WebSocket server")
-                await data_receiver(websocket, plotter)
+                
+                while True:
+                    try:
+                        message = await websocket.recv()
+                        logger.debug(f"Received raw message: {message[:100]}...")
+                        
+                        data = json.loads(message)
+                        logger.debug(f"Parsed data keys: {data.keys()}")
+                        
+                        if 'band_data' not in data or 'band_powers' not in data:
+                            logger.error(f"Missing required data fields. Available keys: {data.keys()}")
+                            continue
+                            
+                        plotter.data_queue.put(data)
+                        
+                    except websockets.ConnectionClosed:
+                        logger.warning("Connection closed by server, attempting to reconnect...")
+                        break
+                    except json.JSONDecodeError as e:
+                        logger.error(f"JSON decode error: {e}", exc_info=True)
+                        continue
+                    except Exception as e:
+                        logger.error(f"Error processing message: {e}", exc_info=True)
+                        continue
+                        
         except Exception as e:
-            logger.error(f"Connection error: {e}")
+            logger.error(f"Connection error: {e}", exc_info=True)
             await asyncio.sleep(5)
-        finally:
             logger.info("Attempting to reconnect...")
+            continue
 
-if __name__ == "__main__":
+async def main_async():
+    # Create the plotter
+    plotter = DataPlotter()
+    
+    # Create tasks
+    websocket_task = asyncio.create_task(handle_websocket(plotter))
+    
     try:
-        asyncio.run(main())
+        # Show the plot (non-blocking)
+        plt.show(block=False)
+        
+        # Keep the program running
+        while plt.get_fignums():  # While there are still figures open
+            await asyncio.sleep(0.1)
+            plt.pause(0.1)  # Allow matplotlib to update
+            
     except KeyboardInterrupt:
         logger.info("Program terminated by user")
+    finally:
+        # Clean up
+        websocket_task.cancel()
+        try:
+            await websocket_task
+        except asyncio.CancelledError:
+            pass
         plt.close('all')
-    except Exception as e:
-        logger.error(f"Program terminated due to error: {e}")
-        plt.close('all')
+
+def main():
+    try:
+        # Create and run the asyncio event loop
+        asyncio.run(main_async())
+    except KeyboardInterrupt:
+        logger.info("Program terminated by user")
+
+if __name__ == "__main__":
+    main()
