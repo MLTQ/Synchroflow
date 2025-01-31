@@ -19,7 +19,7 @@ const char* websocket_server = "192.168.1.38";
 const int websocket_port = 8765;
 
 // LED pins configuration
-const int NUM_PINS = 12;  // Number of LED pins
+const int NUM_PINS = 50;  // Number of LED pins
 const int LED_PINS[NUM_PINS] = {2, 32, 33, 25, 26, 27, 14, 12, 13, 15, 4, 5};  // All LED pins
 
 // Frequency mapping constants

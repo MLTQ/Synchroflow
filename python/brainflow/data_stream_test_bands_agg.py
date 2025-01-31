@@ -50,7 +50,7 @@ def extract_band(data, band_range):
 
 def update(frame, board, lines, power_text):
     try:
-        data = board.get_current_board_data(250)
+        data = board.get_current_board_data(1000)  # Increased from 250 to get more data
         if data.size > 0:
             eeg_data = data[:8]  # Get first 8 channels
             band_data = {band: np.zeros(eeg_data.shape[1]) for band in FREQ_BANDS}
@@ -63,27 +63,17 @@ def update(frame, board, lines, power_text):
                 
                 # Process each frequency band
                 for band_name, band_range in FREQ_BANDS.items():
-                    # Extract band
-                    band = extract_band(channel, band_range)
-                    
-                    # Add to combined band data
-                    band_data[band_name] += band
-                    
-                    # Add to band power
-                    band_powers[band_name] += np.mean(np.square(band))
+                    filtered_data = extract_band(channel, band_range)
+                    band_data[band_name] += filtered_data
+                    band_powers[band_name] += np.mean(np.square(filtered_data))
             
-            # Average across channels
-            for band_name in FREQ_BANDS:
-                band_data[band_name] /= len(eeg_data)
-                band_powers[band_name] /= len(eeg_data)
-            
-            # Update wave plots
-            x = np.arange(len(band_data['Alpha']))  # All bands have same length
-            for (band_name, line) in zip(FREQ_BANDS, lines):
-                line.set_data(x, band_data[band_name])
+            # Update line data
+            x = np.arange(len(band_data['Delta']))
+            for line, (band_name, data) in zip(lines, band_data.items()):
+                line.set_data(x, data / 8.0)  # Divide by number of channels
             
             # Update power text
-            power_str = '\n'.join([f'{band}: {power:.1f} μV²' 
+            power_str = '\n'.join([f'{band}: {power:.2f} μV²' 
                                  for band, power in band_powers.items()])
             power_text.set_text(power_str)
             
@@ -108,10 +98,10 @@ def main():
         logger.info("Starting stream...")
         board.start_stream()
 
-        # Create figure
-        fig = plt.figure(figsize=(15, 8))
+        # Create figure with reduced width and increased height
+        fig = plt.figure(figsize=(10, 6))
         
-        # Plot for all frequency bands
+        # Plot for all frequency bands with adjusted layout
         ax = plt.subplot(111)
         lines = []
         for band_name in FREQ_BANDS:
@@ -119,19 +109,21 @@ def main():
                           color=BAND_COLORS[band_name])
             lines.append(line)
         
-        ax.set_xlim(0, 250)
-        ax.set_ylim(-50, 50)  # Set reasonable μV range
+        # Reduce x-axis range to show more detail
+        ax.set_xlim(0, 1000)  # Show half the samples for bigger waves
+        ax.set_ylim(-25, 25)
         ax.set_title('Combined EEG Frequency Bands')
         ax.set_ylabel('Amplitude (μV)')
         ax.set_xlabel('Sample')
         ax.grid(True)
-        ax.legend(loc='upper right')
+        ax.legend(loc='upper right', fontsize='small')
         
-        # Add text for power display
+        # Adjust text position and size
         power_text = ax.text(0.02, 0.95, '', transform=ax.transAxes,
-                           verticalalignment='top', fontsize=10,
+                           verticalalignment='top', fontsize=8,
                            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
+        # Adjust layout to maximize plot area
         plt.tight_layout()
 
         ani = FuncAnimation(fig, update, fargs=(board, lines, power_text),
