@@ -1,3 +1,8 @@
+#Twin Mind Interface
+This tool was made for the MIT Reality Hack 2025 Hardware Hack. 
+Each of the contributors was a star, and not listed as a github contributor but equally as important was Rui Ma (TODO: Find Rui's socials)
+The purpose of this tool is to copy brainwaves from person A and feed them into person B via photic brainwave entrainment, and then B->A via the same, causing brainwave synchronization.
+
 # Synchroflow
 OpenBCI Cyton -> Wifi Websocket -> ESP32 LED Glasses
 
